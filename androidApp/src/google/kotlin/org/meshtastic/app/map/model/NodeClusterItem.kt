@@ -21,6 +21,7 @@ import com.google.maps.android.clustering.ClusterItem
 import org.meshtastic.core.model.Node
 import org.meshtastic.core.model.util.precisionRadiusMetersOrNull
 import org.meshtastic.feature.map.MapNodePolicy
+import org.meshtastic.feature.map.NodeStackSlot
 
 data class NodeClusterItem(
     val node: Node,
@@ -28,6 +29,8 @@ data class NodeClusterItem(
     val nodeTitle: String,
     val nodeSnippet: String,
     val myNodeNum: Int? = null,
+    /** Where this node sits among others reporting the same position; null when it stands alone. */
+    val stackSlot: NodeStackSlot? = null,
 ) : ClusterItem {
     override val position: LatLng
         get() = nodePosition
@@ -39,7 +42,7 @@ data class NodeClusterItem(
         get() = nodeSnippet
 
     override val zIndex: Float
-        get() = MapNodePolicy.priorityOf(node, myNodeNum).toFloat()
+        get() = MapNodePolicy.priorityOf(node, myNodeNum) + (stackSlot?.drawRank ?: 0f)
 
     fun getPrecisionMeters(): Double? = precisionRadiusMetersOrNull(node.position.precision_bits)
 }

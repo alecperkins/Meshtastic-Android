@@ -30,6 +30,8 @@ The map displays:
 
 Each node that reports a position is shown as a **node chip** marker displaying the node's short name. The chip is colored by the node's own identity color (a stable color derived from its node number) — the same chip used in the node list, so a node looks the same everywhere. Marker color does **not** encode online/offline status. When a node's position updates live, its marker briefly pulses. Nearby markers are clustered as you zoom out. Tapping a cluster zooms in on it, and a cluster whose nodes all share one spot lists them instead.
 
+Nodes often report exactly the same position, because reduced position precision rounds every node in an area onto the same point. When a few nodes share a spot, their chips fan out a little from behind the top one so you can see there is more than one. The top chip stays on the true position, and the fan is the same size at every zoom. When more than four nodes share the spot, the top chip also shows how many there are. Tap any chip in the stack to see the list of nodes at that location.
+
 ### Map Controls
 
 - **Zoom** — pinch or use +/- buttons

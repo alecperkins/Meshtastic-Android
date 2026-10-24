@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.meshtastic.feature.map.MapNodePolicy
+import org.meshtastic.feature.map.NodeStackSlot
 import org.meshtastic.feature.map.maplibre.geojson.NodeFeatureKeys
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -57,5 +58,24 @@ class ChipRankTest {
         val stacked = listOf(properties(), properties(favorite = true), properties())
 
         assertEquals(MapNodePolicy.PRIORITY_PROMINENT, stacked.maxOf { it.chipRank() })
+    }
+
+    @Test
+    fun `the top of a stack takes a tap over a lone chip of the same rank hidden under it`() {
+        val loneUnderneath = properties()
+        val stackTop = buildJsonObject {
+            put(NodeFeatureKeys.IS_SELF, false)
+            put(NodeFeatureKeys.IS_FAVORITE, false)
+            put(NodeFeatureKeys.STACK_RANK, NodeStackSlot(index = 0, count = 3).drawRank)
+        }
+
+        assertEquals(stackTop, listOf(loneUnderneath, stackTop).maxBy { it.chipDrawOrder() })
+    }
+
+    @Test
+    fun `a stack never lifts an ordinary chip over a favorite`() {
+        val stackTop = buildJsonObject { put(NodeFeatureKeys.STACK_RANK, NodeStackSlot(index = 0, count = 9).drawRank) }
+
+        assertTrue(properties(favorite = true).chipDrawOrder() > stackTop.chipDrawOrder())
     }
 }

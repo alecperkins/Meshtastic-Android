@@ -34,4 +34,16 @@ object NodeFeatureKeys {
 
     /** Which rasterized chip image this node's marker should use. See NodeChipLayer. */
     const val CHIP = "chip"
+
+    /** How many nodes share this node's exact position. Absent when it stands alone. See MapNodeStacks. */
+    const val STACK_COUNT = "stackCount"
+
+    /** Which peek offset this node's chip is drawn at, "1" to "3". Absent for the top of a stack and for the rest. */
+    const val STACK_PEEK = "stackPeek"
+
+    /** The fraction added to the chip's sort key so the top of a stack draws above the rest of it. */
+    const val STACK_RANK = "stackRank"
+
+    /** The count shown on the top chip of a stack too big to fan out in full. Absent everywhere else. */
+    const val STACK_BADGE = "stackBadge"
 }

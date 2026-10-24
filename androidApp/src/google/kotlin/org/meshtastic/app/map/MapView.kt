@@ -55,6 +55,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -198,6 +199,7 @@ import org.meshtastic.feature.coverage.rememberCoverageEstimate
 import org.meshtastic.feature.map.BaseMapViewModel.MapFilterState
 import org.meshtastic.feature.map.MapBounds
 import org.meshtastic.feature.map.MapNodePolicy
+import org.meshtastic.feature.map.MapNodeStacks
 import org.meshtastic.feature.map.TRACK_FADE_LEVELS
 import org.meshtastic.feature.map.TRACK_STOP_RADIUS_METERS
 import org.meshtastic.feature.map.component.ClusterMemberEntry
@@ -1323,6 +1325,7 @@ internal fun rememberNodeClusterItems(
     val unknownText = stringResource(Res.string.unknown)
     val nowText = stringResource(Res.string.now)
     return remember(nodes, myNodeNum, relativeTimeBucket, unknownText, nowText) {
+        val stackSlots = MapNodeStacks.group(nodes, myNodeNum).slots
         nodes.map { node ->
             val latLng = LatLng((node.position.latitude_i ?: 0) * DEG_D, (node.position.longitude_i ?: 0) * DEG_D)
             NodeClusterItem(
@@ -1331,9 +1334,15 @@ internal fun rememberNodeClusterItems(
                 nodeTitle = "${node.user.short_name} ${formatAgo(node.position.time, unknownText, nowText)}",
                 nodeSnippet = node.user.long_name,
                 myNodeNum = myNodeNum,
+                stackSlot = stackSlots[node.num],
             )
         }
     }
+}
+
+/** A stack's items in the order the map draws them, top first, so the list reads the same however it was opened. */
+private fun List<NodeClusterItem>.topOfStackFirst(): List<NodeClusterItem> = sortedBy {
+    it.stackSlot?.index ?: Int.MAX_VALUE
 }
 
 // region --- Main Map Content ---
@@ -1358,15 +1367,25 @@ private fun MainMapContent(
     coroutineScope: CoroutineScope,
     onShowClusterItemsDialog: (List<NodeClusterItem>?) -> Unit,
 ) {
+    // Read through updated state in case the clustering library keeps the first click listener it was handed.
+    val currentNodeClusterItems by rememberUpdatedState(nodeClusterItems)
     NodeClusterMarkers(
         nodeClusterItems = nodeClusterItems,
         mapFilterState = mapFilterState,
         navigateToNodeDetails = navigateToNodeDetails,
+        // A node sharing its position with others: list them all rather than open the one that happens to be on top.
+        onStackClick = { item ->
+            onShowClusterItemsDialog(
+                currentNodeClusterItems
+                    .filter { it.stackSlot != null && it.position == item.position }
+                    .topOfStackFirst(),
+            )
+        },
         onClusterClick = { cluster ->
             val items = cluster.items.toList()
             val allSameLocation = items.size > 1 && items.all { it.position == items.first().position }
             if (allSameLocation) {
-                onShowClusterItemsDialog(items)
+                onShowClusterItemsDialog(items.topOfStackFirst())
             } else {
                 val bounds = LatLngBounds.builder()
                 cluster.items.forEach { bounds.include(it.position) }

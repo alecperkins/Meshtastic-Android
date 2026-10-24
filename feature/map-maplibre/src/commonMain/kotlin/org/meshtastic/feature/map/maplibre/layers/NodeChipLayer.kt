@@ -38,22 +38,27 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import org.maplibre.compose.expressions.ast.Expression
 import org.maplibre.compose.expressions.dsl.asBoolean
+import org.maplibre.compose.expressions.dsl.asNumber
 import org.maplibre.compose.expressions.dsl.asString
 import org.maplibre.compose.expressions.dsl.case
 import org.maplibre.compose.expressions.dsl.condition
 import org.maplibre.compose.expressions.dsl.const
 import org.maplibre.compose.expressions.dsl.feature
 import org.maplibre.compose.expressions.dsl.image
+import org.maplibre.compose.expressions.dsl.plus
 import org.maplibre.compose.expressions.dsl.switch
 import org.maplibre.compose.expressions.value.BooleanValue
+import org.maplibre.compose.expressions.value.DpOffsetValue
 import org.maplibre.compose.expressions.value.FloatValue
 import org.maplibre.compose.interaction.ClickResult
 import org.maplibre.compose.layers.FeaturesClickHandler
@@ -64,6 +69,8 @@ import org.meshtastic.core.ui.icon.MeshtasticIcons
 import org.meshtastic.core.ui.icon.Person
 import org.meshtastic.core.ui.icon.Temperature
 import org.meshtastic.feature.map.MapNodePolicy
+import org.meshtastic.feature.map.MapNodeStacks
+import org.meshtastic.feature.map.NodeStackSlot
 import org.meshtastic.feature.map.maplibre.geojson.MapChipGlyph
 import org.meshtastic.feature.map.maplibre.geojson.MapChipKey
 import org.meshtastic.feature.map.maplibre.geojson.NodeFeatureKeys
@@ -95,6 +102,7 @@ internal fun NodeChipLayer(
     nodes: List<Node>,
     onNodeClick: ((Int) -> Unit)? = null,
     chipFilter: Expression<BooleanValue>? = null,
+    onStackClick: ((Int) -> Unit)? = null,
 ) = MapChipLayer(
     id = id,
     source = source,
@@ -102,22 +110,53 @@ internal fun NodeChipLayer(
     // afford.
     chips = remember(nodes) { nodes.map { it.toNodeChip() } },
     filter = chipFilter,
+    iconOffset = stackPeekOffset(),
+    sortKey = chipSortKey() + feature[NodeFeatureKeys.STACK_RANK].asNumber(const(0f)),
     onClick =
     onNodeClick?.let { click ->
         { features ->
             // The chip the user sees on top is the one they meant. Query order is not that order, so pick
             // by the rank [chipSortKey] draws by — on the Google map the highest zIndex marker takes the tap.
             features
-                .maxByOrNull { it.properties.chipRank() }
+                .maxByOrNull { it.properties.chipDrawOrder() }
                 ?.properties
-                ?.get(NodeFeatureKeys.NODE_NUM)
-                ?.let { nodeNum ->
-                    click(nodeNum.jsonPrimitive.int)
+                ?.let { properties ->
+                    val nodeNum = properties[NodeFeatureKeys.NODE_NUM]?.jsonPrimitive?.int ?: return@let null
+                    // A chip in a stack stands for everyone at that spot, so a tap lists them all.
+                    if (onStackClick != null && properties[NodeFeatureKeys.STACK_COUNT] != null) {
+                        onStackClick(nodeNum)
+                    } else {
+                        click(nodeNum)
+                    }
                     ClickResult.Consume
                 } ?: ClickResult.Pass
         }
     },
 )
+
+/**
+ * Where a stacked chip peeks out from behind the top of its stack, from the slot the feature carries. Screen units, so
+ * the chip never moves on the ground and the stack looks the same at every zoom.
+ */
+@Suppress("SpreadOperator") // switch() only takes its cases as varargs
+private fun stackPeekOffset(): Expression<DpOffsetValue> =
+    switch(
+        input = feature[NodeFeatureKeys.STACK_PEEK].asString(const("")),
+        *(1 until MapNodeStacks.MAX_VISIBLE)
+            .map { index ->
+                val (dx, dy) = MapNodeStacks.offsetDp(NodeStackSlot(index = index, count = MapNodeStacks.MAX_VISIBLE))
+                case(index.toString(), const(DpOffset(dx.dp, dy.dp)))
+            }
+            .toTypedArray(),
+        fallback = const(DpOffset.Zero),
+    )
+
+/**
+ * The order chips are actually drawn in: [chipRank] plus the stack fraction the sort key adds, so the top of a stack
+ * beats a lone chip of the same rank hidden underneath it, as it does on screen.
+ */
+internal fun JsonObject?.chipDrawOrder(): Float =
+    chipRank() + (this?.get(NodeFeatureKeys.STACK_RANK)?.jsonPrimitive?.floatOrNull ?: 0f)
 
 /**
  * How far up the stack a node's chip is drawn, mirroring the Google flavor's `NodeClusterItem.zIndex`: this node and
@@ -157,6 +196,8 @@ internal fun MapChipLayer(
     chips: List<MapChipKey>,
     filter: Expression<BooleanValue>? = null,
     onClick: FeaturesClickHandler? = null,
+    iconOffset: Expression<DpOffsetValue> = const(DpOffset.Zero),
+    sortKey: Expression<FloatValue> = chipSortKey(),
 ) {
     val distinct = remember(chips) { chips.distinct().take(MAX_CHIP_IMAGES) }
     val images = rememberChipImages(distinct)
@@ -174,7 +215,8 @@ internal fun MapChipLayer(
             fallback = image(blank, DpSize(1.dp, 1.dp)),
         ),
         iconAllowOverlap = const(true),
-        sortKey = chipSortKey(),
+        iconOffset = iconOffset,
+        sortKey = sortKey,
         onClick = onClick,
     )
 }

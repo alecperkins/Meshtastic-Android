@@ -16,14 +16,20 @@
  */
 package org.meshtastic.feature.map.maplibre.layers
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
+import org.maplibre.compose.expressions.dsl.all
 import org.maplibre.compose.expressions.dsl.asNumber
 import org.maplibre.compose.expressions.dsl.asString
 import org.maplibre.compose.expressions.dsl.const
@@ -31,16 +37,19 @@ import org.maplibre.compose.expressions.dsl.convertToColor
 import org.maplibre.compose.expressions.dsl.feature
 import org.maplibre.compose.expressions.dsl.not
 import org.maplibre.compose.expressions.dsl.step
+import org.maplibre.compose.expressions.value.TranslateAnchor
 import org.maplibre.compose.interaction.ClickResult
 import org.maplibre.compose.layers.CircleLayer
 import org.maplibre.compose.layers.FillLayer
 import org.maplibre.compose.layers.SymbolLayer
 import org.maplibre.compose.map.LocalMapState
 import org.maplibre.compose.sources.GeoJsonOptions
+import org.maplibre.compose.sources.VectorSource
 import org.maplibre.spatialk.geojson.BoundingBox
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
 import org.meshtastic.core.model.Node
+import org.meshtastic.feature.map.MapNodeStacks
 import org.meshtastic.feature.map.maplibre.geojson.ClusterMember
 import org.meshtastic.feature.map.maplibre.geojson.NodeFeatureKeys
 import org.meshtastic.feature.map.maplibre.geojson.nodesToFeatureCollection
@@ -132,6 +141,21 @@ fun NodeLayers(
     val rankedNodes = remember(nodes, zoom) { nodesByIsolation(nodes, zoom, CLUSTER_RADIUS) }
     val chipNodes = remember(rankedNodes, visibleBounds) { nodesInView(rankedNodes, visibleBounds) }
 
+    // Nodes reporting the same position, so a tap on any of their chips can list the whole stack.
+    // Read through updated state: a layer keeps the click handler it was first composed with, and the first
+    // composition can come before the node database has arrived, which left every stack looking empty.
+    val stacks = remember(nodes, myNodeNum) { MapNodeStacks.group(nodes, myNodeNum) }
+    val stackMembers by rememberUpdatedState(stacks.members)
+    val onStackClick: (Int) -> Unit = { nodeNum ->
+        stackMembers[nodeNum]?.let { stack ->
+            onClusterMembers(
+                stack.map {
+                    ClusterMember(nodeNum = it.num, longName = it.user.long_name, shortName = it.user.short_name)
+                },
+            )
+        } ?: onNodeClick(nodeNum)
+    }
+
     // getClusterExpansionZoom became a suspend function in maplibre-compose 0.15.0 (feature queries
     // no longer block the caller), and onClick is not a suspending callback.
     val clusterScope = rememberCoroutineScope()
@@ -152,7 +176,7 @@ fun NodeLayers(
                 clusterMinPoints = CLUSTER_MIN_POINTS
             },
         ) {
-            nodesToFeatureCollection(nodes, myNodeNum)
+            nodesToFeatureCollection(nodes, myNodeNum, stacks)
         }
 
     CircleLayer(
@@ -225,8 +249,9 @@ fun NodeLayers(
         strokeColor = const(Color.White),
         strokeWidth = const(2.dp),
         onClick = { features ->
-            features.firstOrNull()?.properties?.get(NodeFeatureKeys.NODE_NUM)?.let { nodeNum ->
-                onNodeClick(nodeNum.jsonPrimitive.int)
+            features.firstOrNull()?.properties?.let { properties ->
+                val nodeNum = properties[NodeFeatureKeys.NODE_NUM]?.jsonPrimitive?.int ?: return@let null
+                if (properties[NodeFeatureKeys.STACK_COUNT] != null) onStackClick(nodeNum) else onNodeClick(nodeNum)
                 ClickResult.Consume
             } ?: ClickResult.Pass
         },
@@ -238,8 +263,55 @@ fun NodeLayers(
         nodes = chipNodes,
         onNodeClick = onNodeClick,
         chipFilter = !feature.has("point_count"),
+        onStackClick = onStackClick,
+    )
+
+    NodeStackBadgeLayers(id = "node-stack-badge", source = nodeSource)
+}
+
+/**
+ * The count on the top chip of a stack too big to fan out in full: [MapNodeStacks.MAX_VISIBLE] chips show, and this
+ * says how many share the spot.
+ *
+ * Above the chips, pinned to the top chip's top-right corner by a fixed screen offset. Chips are at least 64dp wide and
+ * a short name of four characters fits inside that, so the corner is in the same place for nearly every chip. Both
+ * layers translate against the viewport, as the chip itself is placed, so the badge stays on the corner when the map is
+ * rotated.
+ */
+@Composable
+private fun NodeStackBadgeLayers(id: String, source: VectorSource) {
+    val hasBadge = all(feature.has(NodeFeatureKeys.STACK_BADGE), !feature.has("point_count"))
+    val corner = const(DpOffset(BADGE_OFFSET_X.dp, BADGE_OFFSET_Y.dp))
+    CircleLayer(
+        id = id,
+        source = source,
+        filter = hasBadge,
+        translate = corner,
+        translateAnchor = const(TranslateAnchor.Viewport),
+        color = const(MaterialTheme.colorScheme.primary),
+        radius = const(BADGE_RADIUS.dp),
+        strokeColor = const(Color.White),
+        strokeWidth = const(1.dp),
+    )
+    SymbolLayer(
+        id = "$id-count",
+        source = source,
+        filter = hasBadge,
+        textField = feature[NodeFeatureKeys.STACK_BADGE].asString(),
+        textColor = const(MaterialTheme.colorScheme.onPrimary),
+        textFont = const(listOf("Noto Sans Regular")),
+        textSize = const(BADGE_TEXT_SIZE.sp),
+        textTranslate = corner,
+        textTranslateAnchor = const(TranslateAnchor.Viewport),
+        textAllowOverlap = const(true),
+        textIgnorePlacement = const(true),
     )
 }
+
+private const val BADGE_OFFSET_X = 30
+private const val BADGE_OFFSET_Y = -13
+private const val BADGE_RADIUS = 9
+private const val BADGE_TEXT_SIZE = 11
 
 /** Small enough that a chip drawn over it hides it completely. */
 private const val NODE_DOT_RADIUS = 12

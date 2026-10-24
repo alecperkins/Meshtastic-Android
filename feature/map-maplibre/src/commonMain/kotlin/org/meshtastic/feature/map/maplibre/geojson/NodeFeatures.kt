@@ -17,6 +17,7 @@
 package org.meshtastic.feature.map.maplibre.geojson
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.maplibre.spatialk.geojson.Feature
@@ -25,6 +26,9 @@ import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
 import org.meshtastic.core.model.Node
 import org.meshtastic.core.model.util.precisionRadiusMetersOrNull
+import org.meshtastic.feature.map.MapNodeStacks
+import org.meshtastic.feature.map.NodeStackSlot
+import org.meshtastic.feature.map.NodeStacks
 
 /** Formats an `@ColorInt` ARGB value as the `#rrggbb` string MapLibre expressions parse. */
 @Suppress("MagicNumber")
@@ -38,35 +42,53 @@ internal fun Int.toCssHex(): String {
  *
  * Nodes without a usable fix are dropped rather than emitted at (0, 0) — that is what produced the "flying through the
  * ocean" jump on the OSMdroid map.
+ *
+ * @param stacks nodes sharing a position, whose chips fan out and carry a count. Only the main map passes them: it is
+ *   the one with the badge layer and the stack list behind a tap, so the smaller maps keep their chips where they are.
  */
-fun nodesToFeatureCollection(nodes: List<Node>, myNodeNum: Int? = null): FeatureCollection<Point, JsonObject?> =
-    FeatureCollection(
-        nodes.mapNotNull { node ->
-            node.validPosition ?: return@mapNotNull null
-            val (foreground, background) = node.colors
-            Feature(
-                geometry = Point(Position(longitude = node.longitude, latitude = node.latitude)),
-                properties =
-                buildJsonObject {
-                    put(NodeFeatureKeys.NODE_NUM, node.num)
-                    put(NodeFeatureKeys.SHORT_NAME, node.user.short_name)
-                    put(NodeFeatureKeys.LONG_NAME, node.user.long_name)
-                    put(NodeFeatureKeys.IS_FAVORITE, node.isFavorite)
-                    put(NodeFeatureKeys.IS_ONLINE, node.isOnline)
-                    put(NodeFeatureKeys.IS_SELF, myNodeNum != null && node.num == myNodeNum)
-                    put(NodeFeatureKeys.FOREGROUND, foreground.toCssHex())
-                    put(NodeFeatureKeys.BACKGROUND, background.toCssHex())
-                    put(NodeFeatureKeys.LAST_HEARD, node.lastHeard)
-                    // Omitted rather than written as 0.0 when the node reports no precision: 0 is a real
-                    // radius, and a reader cannot tell the difference. GeoCircle drops such nodes instead.
-                    precisionRadiusMetersOrNull(node.position.precision_bits)?.let {
-                        put(NodeFeatureKeys.PRECISION_METERS, it)
-                    }
-                    put(NodeFeatureKeys.CHIP, node.toNodeChip().featureValue())
-                },
-            )
-        },
-    )
+fun nodesToFeatureCollection(
+    nodes: List<Node>,
+    myNodeNum: Int? = null,
+    stacks: NodeStacks = NodeStacks.NONE,
+): FeatureCollection<Point, JsonObject?> = FeatureCollection(
+    nodes.mapNotNull { node ->
+        node.validPosition ?: return@mapNotNull null
+        val (foreground, background) = node.colors
+        Feature(
+            geometry = Point(Position(longitude = node.longitude, latitude = node.latitude)),
+            properties =
+            buildJsonObject {
+                put(NodeFeatureKeys.NODE_NUM, node.num)
+                put(NodeFeatureKeys.SHORT_NAME, node.user.short_name)
+                put(NodeFeatureKeys.LONG_NAME, node.user.long_name)
+                put(NodeFeatureKeys.IS_FAVORITE, node.isFavorite)
+                put(NodeFeatureKeys.IS_ONLINE, node.isOnline)
+                put(NodeFeatureKeys.IS_SELF, myNodeNum != null && node.num == myNodeNum)
+                put(NodeFeatureKeys.FOREGROUND, foreground.toCssHex())
+                put(NodeFeatureKeys.BACKGROUND, background.toCssHex())
+                put(NodeFeatureKeys.LAST_HEARD, node.lastHeard)
+                // Omitted rather than written as 0.0 when the node reports no precision: 0 is a real
+                // radius, and a reader cannot tell the difference. GeoCircle drops such nodes instead.
+                precisionRadiusMetersOrNull(node.position.precision_bits)?.let {
+                    put(NodeFeatureKeys.PRECISION_METERS, it)
+                }
+                put(NodeFeatureKeys.CHIP, node.toNodeChip().featureValue())
+                stacks.slots[node.num]?.let { slot -> putStackSlot(slot) }
+            },
+        )
+    },
+)
+
+/**
+ * The stack properties the chip and badge layers draw from. The peek offset travels as a string because the layer picks
+ * it with a `match`, which only takes string labels here.
+ */
+private fun JsonObjectBuilder.putStackSlot(slot: NodeStackSlot) {
+    put(NodeFeatureKeys.STACK_COUNT, slot.count)
+    put(NodeFeatureKeys.STACK_RANK, slot.drawRank)
+    if (slot.index in 1 until MapNodeStacks.MAX_VISIBLE) put(NodeFeatureKeys.STACK_PEEK, slot.index.toString())
+    if (slot.showsCount) put(NodeFeatureKeys.STACK_BADGE, slot.count.toString())
+}
 
 /**
  * One distinct chip appearance. Two markers that look identical only need drawing once.

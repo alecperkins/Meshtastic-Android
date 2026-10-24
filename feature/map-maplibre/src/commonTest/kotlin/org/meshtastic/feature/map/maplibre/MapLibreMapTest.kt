@@ -21,6 +21,8 @@ import org.meshtastic.core.model.Node
 import org.meshtastic.core.model.util.precisionRadiusMetersOrNull
 import org.meshtastic.feature.map.BaseMapViewModel
 import org.meshtastic.feature.map.LastHeardFilter
+import org.meshtastic.feature.map.MapNodeStacks
+import org.meshtastic.feature.map.maplibre.geojson.NodeFeatureKeys
 import org.meshtastic.feature.map.maplibre.geojson.circlePolygon
 import org.meshtastic.feature.map.maplibre.geojson.destination
 import org.meshtastic.feature.map.maplibre.geojson.nodesToFeatureCollection
@@ -163,6 +165,34 @@ class NodeFeatureTest {
         val collection = nodesToFeatureCollection(listOf(node(7, 45.0, -122.0)), myNodeNum = 7)
         val properties = assertNotNull(collection.features.single().properties)
         assertEquals("true", properties["isSelf"].toString())
+    }
+
+    @Test
+    fun `nodes on one spot carry their stack slot and only the top of a big stack carries the count`() {
+        val stacked = (1..6).map { node(it, 45.0, -122.0, lastHeard = it) }
+        val nodes = stacked + node(9, 45.1, -122.1)
+        val collection = nodesToFeatureCollection(nodes, stacks = MapNodeStacks.group(nodes, myNodeNum = null))
+        val byNum = collection.features.associate { it.properties!!["nodeNum"].toString().toInt() to it.properties!! }
+
+        assertTrue(stacked.all { byNum.getValue(it.num)[NodeFeatureKeys.STACK_COUNT].toString() == "6" })
+        // Most recently heard on top: node 6, then 5, 4, 3 peek out, and the rest sit underneath.
+        assertEquals("\"6\"", byNum.getValue(6)[NodeFeatureKeys.STACK_BADGE].toString())
+        assertNull(byNum.getValue(6)[NodeFeatureKeys.STACK_PEEK])
+        assertEquals(
+            listOf("\"1\"", "\"2\"", "\"3\""),
+            listOf(5, 4, 3).map { byNum.getValue(it)[NodeFeatureKeys.STACK_PEEK].toString() },
+        )
+        assertNull(byNum.getValue(1)[NodeFeatureKeys.STACK_PEEK])
+        assertNull(byNum.getValue(5)[NodeFeatureKeys.STACK_BADGE])
+        assertNull(byNum.getValue(9)[NodeFeatureKeys.STACK_COUNT])
+    }
+
+    @Test
+    fun `maps that pass no stacks keep their chips where they are`() {
+        val collection = nodesToFeatureCollection((1..3).map { node(it, 45.0, -122.0) })
+
+        assertTrue(collection.features.all { it.properties!![NodeFeatureKeys.STACK_PEEK] == null })
+        assertTrue(collection.features.all { it.properties!![NodeFeatureKeys.STACK_COUNT] == null })
     }
 
     @Test

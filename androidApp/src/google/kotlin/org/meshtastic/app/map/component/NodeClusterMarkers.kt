@@ -17,6 +17,7 @@
 package org.meshtastic.app.map.component
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import com.google.maps.android.clustering.Cluster
@@ -33,6 +34,9 @@ import org.meshtastic.feature.map.BaseMapViewModel
 
 private const val MIN_CLUSTER_SIZE = 10
 
+/** The middle of a marker image, as a fraction of its width and height. */
+private val CENTER_ANCHOR = Offset(0.5f, 0.5f)
+
 /**
  * Threshold for switching to [NonHierarchicalViewBasedAlgorithm], matching that class's own KDoc describing itself as
  * being for "large numbers of items (>1000 markers)".
@@ -42,7 +46,7 @@ private const val VIEW_BASED_ALGORITHM_NODE_THRESHOLD = 1000
 /**
  * Renders node markers with clustering via the library's [Clustering] composable.
  *
- * Each unclustered node is composed as a [PulsingNodeChip] (`clusterItemContent`), with its z-index forwarded through
+ * Each unclustered node is composed as a [StackedNodeChip] (`clusterItemContent`), with its z-index forwarded through
  * [ClusteringMarkerProperties]; cluster bubbles keep the library's default rendering. Native info windows
  * (title/snippet from [NodeClusterItem]) and click interactions are handled by the library renderer, and precision
  * circles are drawn for the currently-unclustered items via `clusterItemDecoration`.
@@ -64,17 +68,26 @@ fun NodeClusterMarkers(
     nodeClusterItems: List<NodeClusterItem>,
     mapFilterState: BaseMapViewModel.MapFilterState,
     navigateToNodeDetails: (Int) -> Unit,
+    onStackClick: (NodeClusterItem) -> Unit,
     onClusterClick: (Cluster<NodeClusterItem>) -> Boolean,
 ) {
     val configuration = LocalConfiguration.current
     Clustering(
         items = nodeClusterItems,
         onClusterClick = onClusterClick,
+        onClusterItemClick = { item ->
+            // Unstacked nodes keep the library's info window; a stacked one lists everything at its spot.
+            if (item.stackSlot != null) onStackClick(item)
+            item.stackSlot != null
+        },
         onClusterItemInfoWindowClick = { item -> navigateToNodeDetails(item.node.num) },
         clusterItemContent = { item ->
             ClusteringMarkerProperties(zIndex = item.zIndex)
-            PulsingNodeChip(node = item.node)
+            StackedNodeChip(node = item.node, slot = item.stackSlot)
         },
+        // Centred, as the MapLibre map and iOS place their markers. A stacked chip is nudged inside its image, which
+        // needs the image's centre — not its bottom edge — on the position.
+        clusterItemContentAnchor = CENTER_ANCHOR,
         clusterItemDecoration = { item ->
             if (mapFilterState.showPrecisionCircle) {
                 item.getPrecisionMeters()?.let { precisionMeters ->
